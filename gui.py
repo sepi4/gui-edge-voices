@@ -291,8 +291,9 @@ class EdgeTTSApp:
         btn_frame.pack(pady=12)
         tk.Button(btn_frame, text="▶ Preview", width=12,
                   command=self._preview).pack(side="left", padx=3)
-        tk.Button(btn_frame, text="💾 Save MP3", width=12,
-                  command=self._save).pack(side="left", padx=3)
+        self.save_btn = tk.Button(btn_frame, text="💾 Save MP3", width=12,
+                                  command=self._save)
+        self.save_btn.pack(side="left", padx=3)
 
         self.stop_btn = tk.Button(right, text="⏹ Stop", width=12,
                                   command=self._stop, state="disabled")
@@ -302,6 +303,13 @@ class EdgeTTSApp:
         self.status_var = tk.StringVar(value="Loading voices...")
         tk.Label(self.root, textvariable=self.status_var, anchor="w").pack(
             side="bottom", fill="x", padx=10, pady=4)
+
+    # ── Busy state helpers ──
+
+    def _set_busy(self, busy: bool):
+        """Enable Stop and disable Save while audio work is running, and vice versa."""
+        self.stop_btn.config(state="normal" if busy else "disabled")
+        self.save_btn.config(state="disabled" if busy else "normal")
 
     # ── Mode switching ──
 
@@ -379,15 +387,53 @@ class EdgeTTSApp:
         if not voice:
             return
         self.status_var.set("Generating audio...")
+        self._set_busy(True)
 
         def task():
             if self._stop_flag.is_set():
+                self.root.after(0, lambda: self._set_busy(False))
                 return
-            asyncio.run(synthesize(text, voice, self.rate_var.get(), output_path))
-            if not self._stop_flag.is_set():
+            try:
+                # Run synthesis; periodically check stop flag via a wrapper
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+                async def run():
+                    rate_str = f"{self.rate_var.get():+d}%"
+                    comm = edge_tts.Communicate(text, voice, rate=rate_str)
+                    # Stream chunk-by-chunk so we can abort early
+                    audio_chunks = []
+                    async for chunk in comm.stream():
+                        if self._stop_flag.is_set():
+                            return None
+                        if chunk["type"] == "audio":
+                            audio_chunks.append(chunk["data"])
+                    if self._stop_flag.is_set():
+                        return None
+                    # Write collected chunks to file
+                    with open(output_path, "wb") as f:
+                        for c in audio_chunks:
+                            f.write(c)
+                    return True
+
+                result = loop.run_until_complete(run())
+                loop.close()
+            except Exception as e:
+                self.root.after(0, lambda: (
+                    self._set_busy(False),
+                    self.status_var.set("Error during generation."),
+                    messagebox.showerror("Error", str(e))
+                ))
+                return
+
+            if result and not self._stop_flag.is_set():
                 self.root.after(0, callback)
             else:
-                self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
+                self.root.after(0, lambda: (
+                    self._set_busy(False),
+                    self.status_var.set("Stopped.")
+                ))
+
         threading.Thread(target=task, daemon=True).start()
 
     def _run_batch_synthesis(self, save_dir):
@@ -400,7 +446,7 @@ class EdgeTTSApp:
             messagebox.showerror("Error", "Please select at least one text file.")
             return
         self._stop_flag.clear()
-        self.stop_btn.config(state="normal")
+        self._set_busy(True)
 
         def task():
             total = len(valid_rows)
@@ -421,7 +467,7 @@ class EdgeTTSApp:
                                     messagebox.showerror("Error", str(err)))
 
             def on_done():
-                self.stop_btn.config(state="disabled")
+                self._set_busy(False)
                 if not self._stop_flag.is_set():
                     self.status_var.set(f"Done. Files saved to: {save_dir}")
                     messagebox.showinfo("Done", f"All files saved to:\n{save_dir}")
@@ -434,7 +480,7 @@ class EdgeTTSApp:
     def _stop(self):
         self._stop_flag.set()
         pygame.mixer.music.stop()
-        self.stop_btn.config(state="disabled")
+        self._set_busy(False)
         self.status_var.set("Stopped.")
 
     def _preview(self):
@@ -443,7 +489,6 @@ class EdgeTTSApp:
                                 "Preview is only available in Option 1 (Paste Text) mode.")
             return
         self._stop_flag.clear()
-        self.stop_btn.config(state="normal")
         self.temp_file = os.path.join(tempfile.gettempdir(), "edge_tts_preview.mp3")
 
         def on_done():
@@ -459,7 +504,7 @@ class EdgeTTSApp:
         if pygame.mixer.music.get_busy() and not self._stop_flag.is_set():
             self.root.after(200, self._poll_playback)
         else:
-            self.stop_btn.config(state="disabled")
+            self._set_busy(False)
             if not self._stop_flag.is_set():
                 self.status_var.set("Ready.")
 
