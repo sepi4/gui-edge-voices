@@ -1,2 +1,6 @@
 venv
 text-audio/*
+
+gui-edge-voices.spec
+build
+dist
