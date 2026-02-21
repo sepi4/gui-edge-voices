@@ -13,10 +13,9 @@ async def get_voices():
     voices = await edge_tts.list_voices()
     return voices
 
-async def synthesize(text, voice, rate, pitch, output_path):
+async def synthesize(text, voice, rate, output_path):
     rate_str = f"{rate:+d}%"
-    pitch_str = f"{pitch:+d}Hz"
-    communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch_str)
+    communicate = edge_tts.Communicate(text, voice, rate=rate_str)
     await communicate.save(output_path)
 
 # --- GUI Application ---
@@ -25,7 +24,7 @@ class EdgeTTSApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Edge TTS GUI")
-        self.root.geometry("800x600")
+        self.root.geometry("900x500")
         self.voices = []
         self.filtered_voices = []
         self.temp_file = None
@@ -36,28 +35,43 @@ class EdgeTTSApp:
         self._load_voices()
 
     def _build_ui(self):
-        pad = {"padx": 10, "pady": 5}
+        # --- Main two-column frame ---
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Text input
-        tk.Label(self.root, text="Text:").pack(anchor="w", **pad)
-        self.text_box = tk.Text(self.root, height=8, wrap="word")
-        self.text_box.pack(fill="x", **pad)
+        main_frame.columnconfigure(0, weight=3)
+        main_frame.columnconfigure(1, weight=2)
+        main_frame.rowconfigure(0, weight=1)
+
+        # === LEFT: Text input ===
+        left_frame = tk.Frame(main_frame)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left_frame.rowconfigure(1, weight=1)
+        left_frame.columnconfigure(0, weight=1)
+
+        tk.Label(left_frame, text="Text:").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.text_box = tk.Text(left_frame, wrap="word")
+        self.text_box.grid(row=1, column=0, sticky="nsew")
+
+        # === RIGHT: Options ===
+        right_frame = tk.Frame(main_frame)
+        right_frame.grid(row=0, column=1, sticky="nsew")
+        right_frame.columnconfigure(0, weight=1)
+
+        pad = {"pady": 5}
 
         # Voice search
-        tk.Label(self.root, text="Voice (type to search):").pack(anchor="w", **pad)
+        tk.Label(right_frame, text="Voice (type to search):").pack(anchor="w", **pad)
 
         self.voice_search_var = tk.StringVar()
         self.voice_search_var.trace_add("write", self._on_search)
 
-        voice_frame = tk.Frame(self.root)
-        voice_frame.pack(fill="x", padx=10)
-
-        self.voice_entry = tk.Entry(voice_frame, textvariable=self.voice_search_var, width=70)
+        self.voice_entry = tk.Entry(right_frame, textvariable=self.voice_search_var)
         self.voice_entry.pack(fill="x")
         self.voice_entry.bind("<Down>", self._focus_listbox)
         self.voice_entry.bind("<Escape>", self._hide_listbox)
 
-        # Dropdown listbox (hidden by default)
+        # Dropdown listbox (hidden by default, placed relative to root)
         self.listbox_frame = tk.Frame(self.root, relief="solid", borderwidth=1)
         self.listbox_scrollbar = tk.Scrollbar(self.listbox_frame, orient="vertical")
         self.voice_listbox = tk.Listbox(
@@ -78,27 +92,22 @@ class EdgeTTSApp:
 
         # Selected voice label
         self.selected_voice_var = tk.StringVar(value="No voice selected")
-        tk.Label(self.root, textvariable=self.selected_voice_var, fg="blue").pack(anchor="w", padx=10)
+        tk.Label(right_frame, textvariable=self.selected_voice_var, fg="blue",
+                 wraplength=250, justify="left").pack(anchor="w", pady=(2, 8))
 
-        self.selected_voice_name = None  # stores the ShortName
+        self.selected_voice_name = None
 
         # Rate slider
-        tk.Label(self.root, text="Rate (speed):").pack(anchor="w", **pad)
+        tk.Label(right_frame, text="Rate (speed):").pack(anchor="w", **pad)
         self.rate_var = tk.IntVar(value=0)
-        tk.Scale(self.root, from_=-50, to=50, orient="horizontal",
+        tk.Scale(right_frame, from_=-50, to=50, orient="horizontal",
                  variable=self.rate_var, label="% (0 = normal)").pack(fill="x", **pad)
 
-        # Pitch slider
-        tk.Label(self.root, text="Pitch:").pack(anchor="w", **pad)
-        self.pitch_var = tk.IntVar(value=0)
-        tk.Scale(self.root, from_=-20, to=20, orient="horizontal",
-                 variable=self.pitch_var, label="Hz (0 = normal)").pack(fill="x", **pad)
-
         # Buttons
-        btn_frame = tk.Frame(self.root)
-        btn_frame.pack(pady=10)
-        tk.Button(btn_frame, text="▶ Preview", width=15, command=self._preview).pack(side="left", padx=5)
-        tk.Button(btn_frame, text="💾 Save MP3", width=15, command=self._save).pack(side="left", padx=5)
+        btn_frame = tk.Frame(right_frame)
+        btn_frame.pack(pady=15)
+        tk.Button(btn_frame, text="▶ Preview", width=13, command=self._preview).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="💾 Save MP3", width=13, command=self._save).pack(side="left", padx=4)
 
         # Status bar
         self.status_var = tk.StringVar(value="Loading voices...")
@@ -147,7 +156,7 @@ class EdgeTTSApp:
         idx = selection[0]
         voice = self.filtered_voices[idx]
         self.selected_voice_name = voice["ShortName"]
-        self.selected_voice_var.set(f"Selected: {voice['ShortName']} ({v['Locale']})" if False else f"Selected: {voice['ShortName']} ({voice['Locale']})")
+        self.selected_voice_var.set(f"Selected: {voice['ShortName']} ({voice['Locale']})")
         self.voice_search_var.set(f"{voice['ShortName']} ({voice['Locale']})")
         self._hide_listbox()
         self.voice_entry.icursor("end")
@@ -176,7 +185,6 @@ class EdgeTTSApp:
             self.voices = sorted(voices, key=lambda v: v["ShortName"])
             self.filtered_voices = self.voices
             self._update_listbox()
-            # Default to en-US-AriaNeural
             for v in self.voices:
                 if v["ShortName"] == "en-US-AriaNeural":
                     self.selected_voice_name = v["ShortName"]
@@ -205,7 +213,7 @@ class EdgeTTSApp:
         self.status_var.set("Generating audio...")
 
         def task():
-            asyncio.run(synthesize(text, voice, self.rate_var.get(), self.pitch_var.get(), output_path))
+            asyncio.run(synthesize(text, voice, self.rate_var.get(), output_path))
             self.root.after(0, callback)
         threading.Thread(target=task, daemon=True).start()
 
