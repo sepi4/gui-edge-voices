@@ -18,6 +18,109 @@ async def synthesize(text, voice, rate, output_path):
     communicate = edge_tts.Communicate(text, voice, rate=rate_str)
     await communicate.save(output_path)
 
+# --- Voice Picker Modal ---
+
+class VoicePickerModal(tk.Toplevel):
+    def __init__(self, parent, voices, current_voice_name, on_select):
+        super().__init__(parent)
+        self.title("Select Voice")
+        self.geometry("420x380")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.voices = voices
+        self.filtered_voices = voices
+        self.on_select = on_select
+
+        self._build_ui(current_voice_name)
+
+        # Center over parent
+        self.update_idletasks()
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{px}+{py}")
+
+        self.voice_entry.focus_set()
+
+    def _build_ui(self, current_voice_name):
+        pad = {"padx": 12, "pady": 6}
+
+        tk.Label(self, text="Search voice:").pack(anchor="w", padx=12, pady=(12, 2))
+
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._on_search)
+        self.voice_entry = tk.Entry(self, textvariable=self.search_var)
+        self.voice_entry.pack(fill="x", padx=12)
+
+        list_frame = tk.Frame(self)
+        list_frame.pack(fill="both", expand=True, padx=12, pady=8)
+
+        scrollbar = tk.Scrollbar(list_frame, orient="vertical")
+        self.voice_listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            selectmode="single",
+            activestyle="dotbox"
+        )
+        scrollbar.config(command=self.voice_listbox.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.voice_listbox.pack(side="left", fill="both", expand=True)
+
+        self.voice_listbox.bind("<Double-Button-1>", self._confirm)
+        self.voice_listbox.bind("<Return>", self._confirm)
+        self.voice_entry.bind("<Return>", self._confirm)
+        self.voice_entry.bind("<Down>", self._focus_listbox)
+
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(fill="x", padx=12, pady=(0, 12))
+        tk.Button(btn_frame, text="Select", width=12, command=self._confirm).pack(side="right", padx=(4, 0))
+        tk.Button(btn_frame, text="Cancel", width=12, command=self.destroy).pack(side="right")
+
+        # Populate listbox
+        self._update_listbox()
+
+        # Pre-select current voice
+        if current_voice_name:
+            for i, v in enumerate(self.filtered_voices):
+                if v["ShortName"] == current_voice_name:
+                    self.voice_listbox.selection_set(i)
+                    self.voice_listbox.see(i)
+                    break
+
+    def _on_search(self, *args):
+        query = self.search_var.get().lower()
+        self.filtered_voices = [
+            v for v in self.voices
+            if query in v["ShortName"].lower() or query in v["Locale"].lower()
+        ]
+        self._update_listbox()
+
+    def _update_listbox(self):
+        self.voice_listbox.delete(0, "end")
+        for v in self.filtered_voices:
+            self.voice_listbox.insert("end", f"{v['ShortName']} ({v['Locale']})")
+
+    def _focus_listbox(self, event=None):
+        if self.filtered_voices:
+            self.voice_listbox.focus_set()
+            self.voice_listbox.selection_set(0)
+            self.voice_listbox.activate(0)
+
+    def _confirm(self, event=None):
+        selection = self.voice_listbox.curselection()
+        if not selection:
+            # If nothing selected but there are results, pick first
+            if self.filtered_voices:
+                voice = self.filtered_voices[0]
+            else:
+                messagebox.showwarning("No selection", "Please select a voice.", parent=self)
+                return
+        else:
+            voice = self.filtered_voices[selection[0]]
+        self.on_select(voice)
+        self.destroy()
+
 # --- GUI Application ---
 
 class EdgeTTSApp:
@@ -26,9 +129,7 @@ class EdgeTTSApp:
         self.root.title("Edge TTS GUI")
         self.root.geometry("900x500")
         self.voices = []
-        self.filtered_voices = []
-        self.temp_file = None
-        self._listbox_visible = False
+        self.selected_voice_name = None
 
         pygame.mixer.init()
         self._build_ui()
@@ -60,42 +161,17 @@ class EdgeTTSApp:
 
         pad = {"pady": 5}
 
-        # Voice search
-        tk.Label(right_frame, text="Voice (type to search):").pack(anchor="w", **pad)
+        # Voice selector row
+        tk.Label(right_frame, text="Voice:").pack(anchor="w", **pad)
 
-        self.voice_search_var = tk.StringVar()
-        self.voice_search_var.trace_add("write", self._on_search)
+        voice_row = tk.Frame(right_frame)
+        voice_row.pack(fill="x", pady=(0, 4))
 
-        self.voice_entry = tk.Entry(right_frame, textvariable=self.voice_search_var)
-        self.voice_entry.pack(fill="x")
-        self.voice_entry.bind("<Down>", self._focus_listbox)
-        self.voice_entry.bind("<Escape>", self._hide_listbox)
+        tk.Button(voice_row, text="Choose Voice…", command=self._open_voice_picker).pack(side="left")
 
-        # Dropdown listbox (hidden by default, placed relative to root)
-        self.listbox_frame = tk.Frame(self.root, relief="solid", borderwidth=1)
-        self.listbox_scrollbar = tk.Scrollbar(self.listbox_frame, orient="vertical")
-        self.voice_listbox = tk.Listbox(
-            self.listbox_frame,
-            height=6,
-            yscrollcommand=self.listbox_scrollbar.set,
-            selectmode="single",
-            activestyle="dotbox"
-        )
-        self.listbox_scrollbar.config(command=self.voice_listbox.yview)
-        self.listbox_scrollbar.pack(side="right", fill="y")
-        self.voice_listbox.pack(side="left", fill="both", expand=True)
-
-        self.voice_listbox.bind("<Return>", self._select_voice)
-        self.voice_listbox.bind("<Double-Button-1>", self._select_voice)
-        self.voice_listbox.bind("<Escape>", self._hide_listbox)
-        self.voice_listbox.bind("<Up>", self._on_listbox_up)
-
-        # Selected voice label
         self.selected_voice_var = tk.StringVar(value="No voice selected")
-        tk.Label(right_frame, textvariable=self.selected_voice_var, fg="blue",
-                 wraplength=250, justify="left").pack(anchor="w", pady=(2, 8))
-
-        self.selected_voice_name = None
+        tk.Label(voice_row, textvariable=self.selected_voice_var, fg="blue",
+                 wraplength=160, justify="left").pack(side="left", padx=(8, 0))
 
         # Rate slider
         tk.Label(right_frame, text="Rate (speed):").pack(anchor="w", **pad)
@@ -113,69 +189,22 @@ class EdgeTTSApp:
         self.status_var = tk.StringVar(value="Loading voices...")
         tk.Label(self.root, textvariable=self.status_var, fg="gray").pack(side="bottom", pady=5)
 
-        # Clicking elsewhere hides the listbox
-        self.root.bind("<Button-1>", self._on_click_outside)
+    # --- Voice picker modal ---
 
-    # --- Voice search logic ---
-
-    def _on_search(self, *args):
-        query = self.voice_search_var.get().lower()
-        self.filtered_voices = [
-            v for v in self.voices
-            if query in v["ShortName"].lower() or query in v["Locale"].lower()
-        ]
-        self._update_listbox()
-        self._show_listbox()
-
-    def _update_listbox(self):
-        self.voice_listbox.delete(0, "end")
-        for v in self.filtered_voices:
-            self.voice_listbox.insert("end", f"{v['ShortName']} ({v['Locale']})")
-
-    def _show_listbox(self):
-        if not self._listbox_visible and self.filtered_voices:
-            self.listbox_frame.place(
-                in_=self.voice_entry,
-                x=0,
-                rely=1.0,
-                relwidth=1.0,
-                anchor="nw"
-            )
-            self.listbox_frame.lift()
-            self._listbox_visible = True
-
-    def _hide_listbox(self, event=None):
-        if self._listbox_visible:
-            self.listbox_frame.place_forget()
-            self._listbox_visible = False
-
-    def _select_voice(self, event=None):
-        selection = self.voice_listbox.curselection()
-        if not selection:
+    def _open_voice_picker(self):
+        if not self.voices:
+            messagebox.showinfo("Please wait", "Voices are still loading, please try again shortly.")
             return
-        idx = selection[0]
-        voice = self.filtered_voices[idx]
+        VoicePickerModal(
+            self.root,
+            self.voices,
+            self.selected_voice_name,
+            self._on_voice_selected
+        )
+
+    def _on_voice_selected(self, voice):
         self.selected_voice_name = voice["ShortName"]
-        self.selected_voice_var.set(f"Selected: {voice['ShortName']} ({voice['Locale']})")
-        self.voice_search_var.set(f"{voice['ShortName']} ({voice['Locale']})")
-        self._hide_listbox()
-        self.voice_entry.icursor("end")
-
-    def _focus_listbox(self, event=None):
-        if self.filtered_voices:
-            self._show_listbox()
-            self.voice_listbox.focus_set()
-            self.voice_listbox.selection_set(0)
-            self.voice_listbox.activate(0)
-
-    def _on_listbox_up(self, event=None):
-        if self.voice_listbox.curselection() == (0,):
-            self.voice_entry.focus_set()
-
-    def _on_click_outside(self, event):
-        widget = event.widget
-        if widget not in (self.voice_entry, self.voice_listbox, self.listbox_frame):
-            self._hide_listbox()
+        self.selected_voice_var.set(f"{voice['ShortName']} ({voice['Locale']})")
 
     # --- Voice loading ---
 
@@ -183,15 +212,12 @@ class EdgeTTSApp:
         def task():
             voices = asyncio.run(get_voices())
             self.voices = sorted(voices, key=lambda v: v["ShortName"])
-            self.filtered_voices = self.voices
-            self._update_listbox()
+            # Default voice
             for v in self.voices:
                 if v["ShortName"] == "en-US-AriaNeural":
-                    self.selected_voice_name = v["ShortName"]
-                    self.selected_voice_var.set(f"Selected: {v['ShortName']} ({v['Locale']})")
-                    self.voice_search_var.set(f"{v['ShortName']} ({v['Locale']})")
+                    self.root.after(0, lambda: self._on_voice_selected(v))
                     break
-            self.status_var.set("Ready.")
+            self.root.after(0, lambda: self.status_var.set("Ready."))
         threading.Thread(target=task, daemon=True).start()
 
     # --- Synthesis ---
