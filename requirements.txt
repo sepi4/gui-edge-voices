@@ -1,0 +1,3 @@
+pyinstaller
+edge-tts
+pygame
