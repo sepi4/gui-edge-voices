@@ -132,6 +132,8 @@ class EdgeTTSApp:
         self.selected_voice_name = None
 
         pygame.mixer.init()
+        self._stop_flag = threading.Event()
+        self._preview_thread = None
         self._build_ui()
         self._load_voices()
 
@@ -161,17 +163,14 @@ class EdgeTTSApp:
 
         pad = {"pady": 5}
 
-        # Voice selector row
+        # Voice selector
         tk.Label(right_frame, text="Voice:").pack(anchor="w", **pad)
 
-        voice_row = tk.Frame(right_frame)
-        voice_row.pack(fill="x", pady=(0, 4))
-
-        tk.Button(voice_row, text="Choose Voice…", command=self._open_voice_picker).pack(side="left")
-
         self.selected_voice_var = tk.StringVar(value="No voice selected")
-        tk.Label(voice_row, textvariable=self.selected_voice_var, fg="blue",
-                 wraplength=160, justify="left").pack(side="left", padx=(8, 0))
+        tk.Label(right_frame, textvariable=self.selected_voice_var, fg="blue",
+                 wraplength=220, justify="left").pack(anchor="w")
+
+        tk.Button(right_frame, text="Choose Voice…", command=self._open_voice_picker).pack(anchor="w", pady=(4, 8))
 
         # Rate slider
         tk.Label(right_frame, text="Rate (speed):").pack(anchor="w", **pad)
@@ -184,6 +183,10 @@ class EdgeTTSApp:
         btn_frame.pack(pady=15)
         tk.Button(btn_frame, text="▶ Preview", width=13, command=self._preview).pack(side="left", padx=4)
         tk.Button(btn_frame, text="💾 Save MP3", width=13, command=self._save).pack(side="left", padx=4)
+
+        self.stop_btn = tk.Button(right_frame, text="⏹ Stop", width=13,
+                                  command=self._stop, state="disabled")
+        self.stop_btn.pack()
 
         # Status bar
         self.status_var = tk.StringVar(value="Loading voices...")
@@ -239,17 +242,41 @@ class EdgeTTSApp:
         self.status_var.set("Generating audio...")
 
         def task():
+            if self._stop_flag.is_set():
+                return
             asyncio.run(synthesize(text, voice, self.rate_var.get(), output_path))
-            self.root.after(0, callback)
+            if not self._stop_flag.is_set():
+                self.root.after(0, callback)
+            else:
+                self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
         threading.Thread(target=task, daemon=True).start()
 
+    def _stop(self):
+        self._stop_flag.set()
+        pygame.mixer.music.stop()
+        self.stop_btn.config(state="disabled")
+        self.status_var.set("Stopped.")
+
     def _preview(self):
+        self._stop_flag.clear()
+        self.stop_btn.config(state="normal")
         self.temp_file = os.path.join(tempfile.gettempdir(), "edge_tts_preview.mp3")
         def on_done():
+            if self._stop_flag.is_set():
+                return
             pygame.mixer.music.load(self.temp_file)
             pygame.mixer.music.play()
             self.status_var.set("Playing preview...")
+            self._poll_playback()
         self._run_synthesis(self.temp_file, on_done)
+
+    def _poll_playback(self):
+        if pygame.mixer.music.get_busy() and not self._stop_flag.is_set():
+            self.root.after(200, self._poll_playback)
+        else:
+            self.stop_btn.config(state="disabled")
+            if not self._stop_flag.is_set():
+                self.status_var.set("Ready.")
 
     def _save(self):
         path = filedialog.asksaveasfilename(defaultextension=".mp3",
