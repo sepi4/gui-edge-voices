@@ -1,0 +1,19 @@
+name: Build Windows EXE
+on: [push, workflow_dispatch]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install pyinstaller edge-tts pygame
+      - name: Build EXE
+        run: pyinstaller --onefile --windowed --name "gui-edge-voices" gui.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-edge-voices-windows
+          path: dist/gui-edge-voices.exe
