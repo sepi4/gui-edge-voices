@@ -3,17 +3,24 @@ Usage is for creation of MP3 files of text files.
 
 Mostly vibe coded with Claude Code website by copy-paste method 😆
 
+### For local run
 
-### To install libs
+- Create venv
+```
+python3 -m venv venv
+```
+
+- To install libs
 ```
 pip install -r requirements.txt
 ```
-###  To run locally.
+
+-  To run locally.
 ```
 python gui
 ```
 
-### To build libs installation
+### To build (we'll create independent binary file)
 ```
 pyinstaller --onefile --windowed --name "gui-edge-voices" gui.py
 ```
